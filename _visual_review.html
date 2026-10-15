@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Visual review frame</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px; background: #dfe5e1; font-family: sans-serif; }
+    .frame { width: 375px; margin: 0 auto; overflow: hidden; background: #fff; box-shadow: 0 20px 60px rgb(0 0 0 / 20%); }
+    iframe { display: block; width: 375px; height: 1000px; border: 0; }
+  </style>
+</head>
+<body>
+  <div class="frame"><iframe id="review-frame" src="index.html" title="375px mobile review"></iframe></div>
+  <pre id="diagnostics"></pre>
+  <script>
+    const frame = document.querySelector('#review-frame');
+    const targetWidth = Number.parseInt(location.hash.slice(1), 10) || 375;
+    frame.style.width = `${targetWidth}px`;
+    frame.parentElement.style.width = `${targetWidth}px`;
+    frame.title = `${targetWidth}px responsive review`;
+    let completed = false;
+
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const diagnose = async () => {
+      if (completed) return;
+      completed = true;
+      await wait(180);
+      const lines = [];
+      const add = (name, pass, detail = '') => lines.push(`${pass ? 'PASS' : 'FAIL'} | ${targetWidth} | ${name}${detail ? ` | ${detail}` : ''}`);
+
+      try {
+        const win = frame.contentWindow;
+        const doc = frame.contentDocument;
+        const root = doc.documentElement;
+        add('viewport width', win.innerWidth === targetWidth, `${win.innerWidth}px`);
+        add('page horizontal overflow', root.scrollWidth <= root.clientWidth + 1, `${root.scrollWidth}/${root.clientWidth}`);
+
+        const menuButton = doc.querySelector('.menu-button');
+        const nav = doc.querySelector('.site-nav');
+        const backdrop = doc.querySelector('.nav-backdrop');
+        if (targetWidth <= 920) {
+          menuButton.click();
+          await wait(80);
+          add('menu opens', menuButton.getAttribute('aria-expanded') === 'true' && nav.classList.contains('is-open') && doc.body.classList.contains('is-menu-open'));
+          add('menu aligns below header', Math.abs(nav.getBoundingClientRect().top - doc.querySelector('.site-header').getBoundingClientRect().bottom) < 1.5, `${nav.getBoundingClientRect().top.toFixed(1)}/${doc.querySelector('.site-header').getBoundingClientRect().bottom.toFixed(1)}`);
+          doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          await wait(30);
+          add('menu Escape closes', menuButton.getAttribute('aria-expanded') === 'false' && !nav.classList.contains('is-open') && doc.activeElement === menuButton && backdrop.getAttribute('aria-hidden') === 'true');
+        } else {
+          add('desktop navigation', win.getComputedStyle(menuButton).display === 'none' && !nav.hasAttribute('aria-hidden'));
+        }
+
+        const faq = [...doc.querySelectorAll('.faq-list details')];
+        faq[0].querySelector('summary').click();
+        faq[1].querySelector('summary').click();
+        await wait(30);
+        add('FAQ one-at-a-time behavior', !faq[0].open && faq[1].open);
+
+        const opener = doc.querySelector('[data-demo-kind="WEB予約"]');
+        const dialog = doc.querySelector('#demo-dialog');
+        opener.click();
+        await wait(30);
+        add('demo dialog opens', dialog.open && doc.querySelector('#demo-dialog-title').textContent.includes('デモ'));
+        doc.querySelector('[data-demo-close]').click();
+        await wait(30);
+        add('dialog closes and restores focus', !dialog.open && doc.activeElement === opener);
+
+        const schedule = doc.querySelector('.schedule-wrap');
+        const table = doc.querySelector('.schedule-table');
+        if (targetWidth <= 740) {
+          add('schedule internal scroll', table.scrollWidth > schedule.clientWidth && schedule.scrollWidth > schedule.clientWidth, `${schedule.clientWidth}/${schedule.scrollWidth}`);
+          add('schedule hint visible', win.getComputedStyle(doc.querySelector('.schedule-hint')).display !== 'none');
+        } else {
+          add('schedule stays within page', root.scrollWidth <= root.clientWidth + 1);
+        }
+
+        const sizes = ['.section-kicker', '.service-card__note', '.access-card dd small']
+          .map((selector) => parseFloat(win.getComputedStyle(doc.querySelector(selector)).fontSize));
+        add('supporting text at least 12px', sizes.every((size) => size >= 12), sizes.join(','));
+
+        if (win.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          const reveal = doc.querySelector('.service-card');
+          add('reduced motion content visible', !reveal.classList.contains('reveal-ready') && parseFloat(win.getComputedStyle(reveal).opacity) === 1);
+        }
+      } catch (error) {
+        lines.push(`ERROR | ${targetWidth} | ${error.stack || error}`);
+      }
+
+      const passed = lines.filter((line) => line.startsWith('PASS')).length;
+      const failed = lines.filter((line) => line.startsWith('FAIL')).length;
+      document.querySelector('#diagnostics').textContent = `SUMMARY | PASS=${passed} FAIL=${failed}\n${lines.join('\n')}`;
+      document.body.dataset.complete = 'true';
+    };
+    frame.addEventListener('load', diagnose);
+    if (frame.contentDocument?.readyState === 'complete') diagnose();
+  </script>
+</body>
+</html>

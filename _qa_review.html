@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>Local QA</title>
+  <style>
+    body { font-family: Consolas, monospace; white-space: pre-wrap; }
+    iframe { position: fixed; left: 0; top: 0; opacity: 0; pointer-events: none; border: 0; }
+  </style>
+</head>
+<body>
+  <iframe id="index-320" src="index.html" style="width:320px;height:1000px"></iframe>
+  <iframe id="index-375" src="index.html" style="width:375px;height:1000px"></iframe>
+  <iframe id="index-768" src="index.html" style="width:768px;height:1000px"></iframe>
+  <iframe id="index-920" src="index.html" style="width:920px;height:1000px"></iframe>
+  <iframe id="index-921" src="index.html" style="width:921px;height:1000px"></iframe>
+  <iframe id="index-1440" src="index.html" style="width:1440px;height:1000px"></iframe>
+  <iframe id="privacy-320" src="privacy.html" style="width:320px;height:1000px"></iframe>
+  <iframe id="privacy-1440" src="privacy.html" style="width:1440px;height:1000px"></iframe>
+  <pre id="results">RUNNING</pre>
+  <script>
+    const widths = [320, 375, 768, 920, 921, 1440];
+    const results = [];
+    const wait = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
+    const add = (width, name, pass, detail = '') => results.push(`${pass ? 'PASS' : 'FAIL'} | ${width} | ${name}${detail ? ` | ${detail}` : ''}`);
+
+    async function loadPage(src, width) {
+      const prefix = src.startsWith('privacy') ? 'privacy' : 'index';
+      return document.querySelector(`#${prefix}-${width}`);
+    }
+
+    async function checkIndex(width) {
+      const frame = await loadPage('index.html', width);
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+      const root = doc.documentElement;
+
+      add(width, 'viewport width', win.innerWidth === width, `${win.innerWidth}px`);
+      add(width, 'page horizontal overflow', root.scrollWidth <= root.clientWidth + 1, `${root.scrollWidth}/${root.clientWidth}`);
+
+      const menuButton = doc.querySelector('.menu-button');
+      const nav = doc.querySelector('.site-nav');
+      const backdrop = doc.querySelector('.nav-backdrop');
+      if (width <= 920) {
+        menuButton.click();
+        await wait(80);
+        add(width, 'menu opens', menuButton.getAttribute('aria-expanded') === 'true' && nav.classList.contains('is-open') && doc.body.classList.contains('is-menu-open'));
+        doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await wait(20);
+        add(width, 'menu Escape closes and restores focus', menuButton.getAttribute('aria-expanded') === 'false' && !nav.classList.contains('is-open') && doc.activeElement === menuButton);
+        add(width, 'menu aligns below header', Math.abs(nav.getBoundingClientRect().top - doc.querySelector('.site-header').getBoundingClientRect().bottom) < 1.5, `${nav.getBoundingClientRect().top.toFixed(1)}/${doc.querySelector('.site-header').getBoundingClientRect().bottom.toFixed(1)}`);
+        add(width, 'backdrop hidden after close', backdrop.getAttribute('aria-hidden') === 'true');
+      } else {
+        add(width, 'desktop nav visible', win.getComputedStyle(menuButton).display === 'none' && !nav.hasAttribute('aria-hidden'));
+      }
+
+      const faq = [...doc.querySelectorAll('.faq-list details')];
+      faq[0].querySelector('summary').click();
+      faq[1].querySelector('summary').click();
+      await wait(20);
+      add(width, 'FAQ keeps one item open', !faq[0].open && faq[1].open);
+
+      const opener = doc.querySelector('[data-demo-kind="WEB予約"]');
+      const dialog = doc.querySelector('#demo-dialog');
+      opener.click();
+      await wait(20);
+      add(width, 'demo dialog opens without navigation', dialog.open && doc.querySelector('#demo-dialog-title').textContent.includes('デモ'));
+      doc.querySelector('[data-demo-close]').click();
+      await wait(20);
+      add(width, 'dialog closes and restores focus', !dialog.open && doc.activeElement === opener);
+
+      const schedule = doc.querySelector('.schedule-wrap');
+      const table = doc.querySelector('.schedule-table');
+      if (width <= 740) {
+        add(width, 'schedule uses internal scroll', table.scrollWidth > schedule.clientWidth && schedule.scrollWidth > schedule.clientWidth, `${schedule.clientWidth}/${schedule.scrollWidth}`);
+        add(width, 'schedule hint visible', win.getComputedStyle(doc.querySelector('.schedule-hint')).display !== 'none');
+      } else {
+        add(width, 'schedule table fits or scrolls internally', root.scrollWidth <= root.clientWidth + 1);
+      }
+
+      const smallText = [
+        '.section-kicker',
+        '.service-card__note',
+        '.access-card dd small'
+      ].map((selector) => parseFloat(win.getComputedStyle(doc.querySelector(selector)).fontSize));
+      add(width, 'key supporting text is at least 12px', smallText.every((size) => size >= 12), smallText.join(','));
+
+      const reveal = doc.querySelector('.service-card');
+      if (win.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        add(width, 'reduced motion keeps content visible', !reveal.classList.contains('reveal-ready') && parseFloat(win.getComputedStyle(reveal).opacity) === 1);
+      }
+
+    }
+
+    async function checkPrivacy(width) {
+      const frame = await loadPage('privacy.html', width);
+      const doc = frame.contentDocument;
+      add(`privacy-${width}`, 'horizontal overflow', doc.documentElement.scrollWidth <= doc.documentElement.clientWidth + 1, `${doc.documentElement.scrollWidth}/${doc.documentElement.clientWidth}`);
+      add(`privacy-${width}`, 'main and skip link remain', Boolean(doc.querySelector('main#main') && doc.querySelector('.skip-link[href="#main"]')));
+    }
+
+    window.addEventListener('load', () => {
+      (async () => {
+      try {
+        for (const width of widths) await checkIndex(width);
+        await checkPrivacy(320);
+        await checkPrivacy(1440);
+      } catch (error) {
+        results.push(`ERROR | ${error.stack || error}`);
+      }
+      const passed = results.filter((line) => line.startsWith('PASS')).length;
+      const failed = results.filter((line) => line.startsWith('FAIL')).length;
+      document.querySelector('#results').textContent = `SUMMARY | PASS=${passed} FAIL=${failed}\n${results.join('\n')}`;
+      document.body.dataset.complete = 'true';
+      })();
+    }, { once: true });
+  </script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /
+
+# This is a fictional clinic portfolio demo, intentionally excluded from search indexing.
